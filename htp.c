@@ -12,7 +12,7 @@
 #include <string.h>
 
 #define PORT 8080
-#define BUF_SIZE 1000000
+#define BUFFER_SIZE 1e6
 
 const char *get_mime_type(const char *ext)
 {
@@ -33,24 +33,24 @@ const char *get_mime_type(const char *ext)
 	}
 }
 
-void build_http_response(const char *filename, const char *ext, char *resp,
-			 size_t *resp_len)
+void build_http_response(const char *filename, const char *extension,
+			 char *response, size_t *response_len)
 {
-	const char *mime_type = get_mime_type(ext);
+	const char *mime_type = get_mime_type(extension);
 
-	char *header = (char *)malloc(BUF_SIZE * sizeof(char));
-	snprintf(header, BUF_SIZE,
+	char *header = (char *)malloc(BUFFER_SIZE * sizeof(char));
+	snprintf(header, BUFFER_SIZE,
 		 "HTTP/1.1 200 OK\r\n"
 		 "Content-Type: %s\r\n",
 		 mime_type);
 
 	int file_fd = open(filename, O_RDONLY);
 	if (file_fd == -1) {
-		snprintf(resp, BUF_SIZE,
+		snprintf(response, BUFFER_SIZE,
 			 "HTTP/1.1 404 Not Found\r\n"
 			 "Content-Type: text/plain\r\n"
 			 "404 Not Found");
-		*resp_len = strlen(resp);
+		*response_len = strlen(response);
 		return;
 	}
 
@@ -58,19 +58,21 @@ void build_http_response(const char *filename, const char *ext, char *resp,
 	fstat(file_fd, &file_stat);
 	off_t file_size = file_stat.st_size;
 
-	char *clen;
-	asprintf(&clen, "Content-Length: %lld\r\n\r\n", file_size);
-	strcat(header, clen);
-	free(clen);
+	// abstract this into it's own method? feels weird to just exist here
+	char *content_length_header;
+	asprintf(&content_length_header, "Content-Length: %lld\r\n\r\n",
+		 file_size);
+	strcat(header, content_length_header);
+	free(content_length_header);
 
-	*resp_len = 0;
-	memcpy(resp, header, strlen(header));
-	*resp_len += strlen(header);
+	*response_len = 0;
+	memcpy(response, header, strlen(header));
+	*response_len += strlen(header);
 
 	ssize_t bytes_read;
-	while ((bytes_read = read(file_fd, resp + *resp_len,
-				  BUF_SIZE - *resp_len)) > 0) {
-		*resp_len += bytes_read;
+	while ((bytes_read = read(file_fd, response + *response_len,
+				  BUFFER_SIZE - *response_len)) > 0) {
+		*response_len += bytes_read;
 	}
 	free(header);
 	close(file_fd);
@@ -78,6 +80,7 @@ void build_http_response(const char *filename, const char *ext, char *resp,
 
 char *url_decode(const char *encoded_filename)
 {
+	// TODO: implement this - take out %20 and replace w/ space etc
 	return (char *)encoded_filename;
 }
 
@@ -96,90 +99,68 @@ const char *get_file_extension(char *filename)
 
 void *handle_client(void *arg)
 {
-	int client_fd = *((int *)arg);
-	char *buf = (char *)malloc(BUF_SIZE * sizeof(char));
-	ssize_t bytes_recv = recv(client_fd, buf, BUF_SIZE, 0);
-	if (bytes_recv > 0) {
+	int client_fd = *((int *)arg); // gimmie that socket_fd
+	char *buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+	ssize_t bytes_received = recv(client_fd, buffer, BUFFER_SIZE, 0);
+	if (bytes_received > 0) {
 		regex_t regex;
 		regcomp(&regex, "^(.*) /([^ ]*) HTTP/1", REG_EXTENDED);
 		regmatch_t matches[3];
+		char *response = (char *)malloc(BUFFER_SIZE * 2 * sizeof(char));
+		size_t response_len;
 
-		if (regexec(&regex, buf, 3, matches, 0) == 0) {
-			buf[matches[1].rm_eo] = '\0';
-			buf[matches[2].rm_eo] = '\0';
+		if (regexec(&regex, buffer, 3, matches, 0) == 0) {
+			buffer[matches[1].rm_eo] = '\0';
+			buffer[matches[2].rm_eo] = '\0';
 
-			const char *req_type = buf + matches[1].rm_so;
-			char *filename = strdup(buf + matches[2].rm_so);
+			const char *request_type = buffer + matches[1].rm_so;
+			char *filename = strdup(buffer + matches[2].rm_so);
 
 			if (strlen(filename) == 0) {
 				free(filename);
 				filename = strdup("index.html");
 			}
 
-			char ext[32];
-			strcpy(ext, get_file_extension(filename));
-			if (strlen(ext) == 0) {
+			char extension[32];
+			strcpy(extension, get_file_extension(filename));
+			if (strlen(extension) == 0) {
 				asprintf(&filename, "%s.html", filename);
-				strcpy(ext, "html");
+				strcpy(extension, "html");
 			}
 
-			char *resp =
-				(char *)malloc(BUF_SIZE * 2 * sizeof(char));
-			size_t resp_len;
-			if (strcmp(req_type, "GET") == 0) {
-				build_http_response(filename, ext, resp,
-						    &resp_len);
+			if (strcmp(request_type, "GET") == 0) {
+				build_http_response(filename, extension,
+						    response, &response_len);
 			} else {
 				// not supported request type
-				snprintf(resp, BUF_SIZE,
+				snprintf(response, BUFFER_SIZE,
 					 "HTTP/1.1 501 Not Implemented\r\n"
 					 "Content-Type: text/plain\r\n"
 					 "501 Not Implemented");
-				resp_len = strlen(resp);
+				response_len = strlen(response);
 			}
 
-			send(client_fd, resp, resp_len, 0);
+			send(client_fd, response, response_len, 0);
 
-			free(resp);
 			free(filename);
 		} else {
-			char *resp =
-				(char *)malloc(BUF_SIZE * 2 * sizeof(char));
-
-			snprintf(resp, BUF_SIZE,
+			snprintf(response, BUFFER_SIZE,
 				 "HTTP/1.1 404 Not Found\r\n"
 				 "Content-Type: text/plain\r\n"
 				 "404 Not Found");
-			size_t resp_len = strlen(resp);
+			response_len = strlen(response);
 
-			send(client_fd, resp, resp_len, 0);
-			free(resp);
+			send(client_fd, response, response_len, 0);
 		}
 
+		free(response);
 		regfree(&regex);
 	}
+
 	close(client_fd);
-	free(arg);
-	free(buf);
+	free(arg); // client_fd
+	free(buffer);
 	return NULL;
-}
-
-void htp_send_header(int sock, char *header, char *value)
-{
-	size_t len = snprintf(NULL, 0, "%s %s\n", header, value);
-	char *buf = malloc(len + 1);
-	snprintf(buf, len + 1, "%s %s\n", header, value);
-	send(sock, buf, strlen(buf), 0);
-	free(buf);
-}
-
-void htp_log(char *msg)
-{
-	time_t now = time(NULL);
-	struct tm *tm = localtime(&now);
-	char time_data[64];
-	strftime(time_data, sizeof(time_data), "%x %X", tm);
-	fprintf(stdout, "[htp] %s %s\n", time_data, msg);
 }
 
 int main(void)
@@ -193,7 +174,7 @@ int main(void)
 	}
 
 	int yes = 1;
-	setsockopt(server_fd, 0, SO_REUSEADDR, &yes, sizeof(yes));
+	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
 
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = INADDR_ANY;
