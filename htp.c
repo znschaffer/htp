@@ -1,5 +1,6 @@
 #include "htp.h"
 #include <pthread.h>
+#include <stdarg.h>
 #include <netdb.h>
 #include <time.h>
 #include <sys/socket.h>
@@ -77,10 +78,8 @@ void build_http_response(const char *filename, const char *extension,
 	free(header);
 	close(file_fd);
 }
-
 char *url_decode(const char *encoded_filename)
 {
-	// TODO: implement this - take out %20 and replace w/ space etc
 	return (char *)encoded_filename;
 }
 
@@ -120,7 +119,6 @@ void *handle_client(void *arg)
 				free(filename);
 				filename = strdup("index.html");
 			}
-
 			char extension[32];
 			strcpy(extension, get_file_extension(filename));
 			if (strlen(extension) == 0) {

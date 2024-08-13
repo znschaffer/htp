@@ -5,6 +5,8 @@
 # Prerequisites
 *.d
 
+.clangd
+
 # Object files
 *.o
 *.ko
