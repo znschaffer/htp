@@ -1,4 +1,5 @@
 #include "htp.h"
+#include <ctype.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <netdb.h>
@@ -78,9 +79,31 @@ void build_http_response(const char *filename, const char *extension,
 	free(header);
 	close(file_fd);
 }
-char *url_decode(const char *encoded_filename)
+
+char *url_decode(char *encoded_filename)
 {
-	return (char *)encoded_filename;
+	char *t;
+	char *decoded_filename = calloc(strlen(encoded_filename), sizeof(char));
+
+	for (t = encoded_filename; *t != '\0'; t++) {
+		if (*t == '%') {
+			if (!isdigit(*(t + 1)) || !isdigit(*(t + 2))) {
+				strncat(decoded_filename, t, sizeof(char));
+				continue;
+			}
+			char encoded_char[2];
+			char decoded_char[sizeof(int)];
+			strncpy(encoded_char, t + 1, 2 * sizeof(char));
+			int char_as_hex = (int)strtol(encoded_char, NULL, 16);
+			snprintf(decoded_char, sizeof(int), "%c", char_as_hex);
+			strncat(decoded_filename, decoded_char, sizeof(int));
+			t += 2;
+		} else {
+			strncat(decoded_filename, t, sizeof(char));
+		}
+	}
+
+	return decoded_filename;
 }
 
 const char *get_file_extension(char *filename)
@@ -113,7 +136,10 @@ void *handle_client(void *arg)
 			buffer[matches[2].rm_eo] = '\0';
 
 			const char *request_type = buffer + matches[1].rm_so;
-			char *filename = strdup(buffer + matches[2].rm_so);
+			char *encoded_filename = buffer + matches[2].rm_so;
+
+			char *filename = url_decode(encoded_filename);
+			fprintf(stderr, "%s\n", filename);
 
 			if (strlen(filename) == 0) {
 				free(filename);
@@ -166,7 +192,9 @@ int main(void)
 	int server_fd;
 	struct sockaddr_in server_addr;
 
-	if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+	server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	if (server_fd < 0) {
 		perror("socket");
 		exit(EXIT_FAILURE);
 	}
@@ -196,9 +224,10 @@ int main(void)
 		socklen_t client_addr_len = sizeof(client_addr);
 		int *client_fd = malloc(sizeof(int));
 
-		if ((*client_fd = accept(server_fd,
-					 (struct sockaddr *)&client_addr,
-					 &client_addr_len)) < 0) {
+		*client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
+				    &client_addr_len);
+
+		if (*client_fd < 0) {
 			perror("accept");
 			continue;
 		}
